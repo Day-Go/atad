@@ -52,24 +52,26 @@ def a_star(G, start, goal, h):
 
     return None
 
-grid_width = 100
-nodes = []
 
-for i in range(grid_width):
-    nodes.append((i,i))
+def generate_random_graph():
+    nodes = []
 
-for p in permutations([i for i in range(grid_width)], 2):
-    nodes.append(p)
+    for i in range(grid_width):
+        nodes.append((i,i))
 
+    for p in permutations([i for i in range(grid_width)], 2):
+        nodes.append(p)
 
-G = nx.Graph()
-G.add_nodes_from(nodes)
+    G = nx.Graph()
+    G.add_nodes_from(nodes)
 
-for edge in combinations(nodes, 2):
-    if taxicab_distance(*edge) > 1:
-        continue
-    length = random.randint(1,5)
-    G.add_edge(*edge, length=length)
+    for edge in combinations(nodes, 2):
+        if taxicab_distance(*edge) > 1:
+            continue
+        length = random.randint(1,5)
+        G.add_edge(*edge, length=length)
+
+    return G
 
 
 pygame.init()
@@ -77,11 +79,11 @@ screen = pygame.display.set_mode((800, 800))
 clock = pygame.time.Clock()
 running = True
 
-cell_size = 8
+grid_width = 50
+cell_size = 16
 
-
+G = generate_random_graph()
 a_star_step_generator = a_star(G, list(G.nodes)[0], list(G.nodes)[grid_width-1], chebychev_distance)
-
 
 step = 0
 while running:
@@ -91,7 +93,7 @@ while running:
 
     screen.fill("purple")
 
-    for i, node in enumerate(nodes):
+    for i, node in enumerate(list(G.nodes)):
         grid_cell = pygame.Rect(node[0]*cell_size, node[1]*cell_size, cell_size, cell_size)
         colour = pygame.Color(200, 200, 200) if (node[0] + node[1]) % 2 == 0 else pygame.Color(100, 100, 100)
         if node == a_star_step_generator[step]:
@@ -102,11 +104,15 @@ while running:
     for edge in G.edges():
         start_pos = (edge[0][0]*cell_size + cell_size//2, edge[0][1]*cell_size + cell_size//2)
         end_pos = (edge[1][0]*cell_size + cell_size//2, edge[1][1]*cell_size + cell_size//2)
-        pygame.draw.line(screen, pygame.Color(0,0,0), start_pos, end_pos) 
+        edge_length = G.edges[edge[0], edge[1]]['length']
+
+        pygame.draw.line(screen, pygame.Color(0,255//edge_length,255//edge_length), start_pos, end_pos, 2) 
 
     step += 1
     if step == len(a_star_step_generator):
         step = 0
+        G = generate_random_graph()
+        a_star_step_generator = a_star(G, list(G.nodes)[0], list(G.nodes)[grid_width-1], chebychev_distance)
 
     pygame.display.flip()
 
