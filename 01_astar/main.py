@@ -108,14 +108,14 @@ while running:
 
         pygame.draw.line(screen, pygame.Color(0,255//edge_length,255//edge_length), start_pos, end_pos, 2) 
 
+    pygame.display.flip()
+
+    clock.tick(60)
+
     step += 1
     if step == len(a_star_step_generator):
         step = 0
         G = generate_random_graph()
         a_star_step_generator = a_star(G, list(G.nodes)[0], list(G.nodes)[grid_width-1], chebychev_distance)
-
-    pygame.display.flip()
-
-    clock.tick(60)
 
 pygame.quit()
