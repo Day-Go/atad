@@ -68,7 +68,7 @@ def generate_random_graph():
     for edge in combinations(nodes, 2):
         if taxicab_distance(*edge) > 1:
             continue
-        length = random.randint(1,5)
+        length = random.randint(1,4)
         G.add_edge(*edge, length=length)
 
     return G
@@ -84,7 +84,7 @@ cell_size = 16
 
 G = generate_random_graph()
 a_star_step_generator = a_star(G, list(G.nodes)[0], list(G.nodes)[grid_width-1], chebychev_distance)
-
+passed_nodes = []
 step = 0
 while running:
     for event in pygame.event.get():
@@ -96,8 +96,13 @@ while running:
     for i, node in enumerate(list(G.nodes)):
         grid_cell = pygame.Rect(node[0]*cell_size, node[1]*cell_size, cell_size, cell_size)
         colour = pygame.Color(200, 200, 200) if (node[0] + node[1]) % 2 == 0 else pygame.Color(100, 100, 100)
+
+        if node in passed_nodes:
+            colour = pygame.Color(200,125,0)
+
         if node == a_star_step_generator[step]:
             colour = pygame.Color(255,0,0)
+            passed_nodes.append(node)
 
         screen.fill(colour, grid_cell)
 
@@ -110,10 +115,11 @@ while running:
 
     pygame.display.flip()
 
-    clock.tick(60)
+    clock.tick(30)
 
     step += 1
     if step == len(a_star_step_generator):
+        passed_nodes = []
         step = 0
         G = generate_random_graph()
         a_star_step_generator = a_star(G, list(G.nodes)[0], list(G.nodes)[grid_width-1], chebychev_distance)
