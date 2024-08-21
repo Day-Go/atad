@@ -91,12 +91,12 @@ while running:
         if event.type == pygame.QUIT:
             running = False
 
-    screen.fill("purple")
+    screen.fill("black")
 
     for i, node in enumerate(list(G.nodes)):
         grid_cell = pygame.Rect(node[0]*cell_size, node[1]*cell_size, cell_size, cell_size)
         colour = pygame.Color(200, 200, 200) if (node[0] + node[1]) % 2 == 0 else pygame.Color(100, 100, 100)
-
+        colour = pygame.Color(0,0,0)
         if node in passed_nodes:
             colour = pygame.Color(200,125,0)
 
