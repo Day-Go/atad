@@ -1,6 +1,6 @@
 from fasthtml.common import *
 
-css = Style('.square-dark{background-color: gray} .square-light{background-color: antiquewhite} :root{--pico-grid-column-gap: 0px; --pico-grid-row-gap: 0px}')
+css = Style('.square-dark{background-color: gray} .square-light{background-color: antiquewhite} :root{--pico-grid-column-gap: 0px; --pico-grid-row-gap: 0px} .checker-piece{width: 80px; height: 80px; border-radius: 50%; background-color: #e74c3c;} .checker-piece.black{background-color: #34495e;}')
 
 app = FastHTML(hdrs=(picolink, css))
 
@@ -15,4 +15,4 @@ board = Div(*rows, style='width: 800px')
 
 @app.get("/")
 def home():
-    return Div(H1('Hello, World'), board)
+    return Div(H1('Hello, World'), board, Div(cls='checker-piece'), Div(cls='checker-piece black'))
