@@ -44,7 +44,7 @@ void update_grid(int *grid, int *new_grid) {
         for (int j = 0; j < GRID_W; j++) {
             int live_neighbors = count_live_neighbors(grid, i, j);
 
-            // game of life rules for now
+            // game of life rules for now 
             if (grid[i * GRID_W + j] == 1) {
                 new_grid[i * GRID_W + j] = (live_neighbors == 2 || live_neighbors == 3) ? 1 : 0;
             } else {
@@ -54,8 +54,37 @@ void update_grid(int *grid, int *new_grid) {
     }
 }
 
-bool toggle_pause() {
-    return !is_running;
+void handle_mouse_drag(int *grid, float cell_size, float offset) {
+    static bool is_dragging = false;
+    static int last_i = -1, last_j = -1;
+
+    if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) || IsMouseButtonDown(MOUSE_RIGHT_BUTTON)) {
+        Vector2 mouse_pos = GetMousePosition();
+
+        // get cell idx
+        int i = (mouse_pos.y - 8) / (cell_size + offset * 2);
+        int j = (mouse_pos.x - 8) / (cell_size + offset * 2);
+
+        // check boundaries 
+        if (i >= 0 && i < GRID_H && j >= 0 && j < GRID_W) { 
+            // debounce
+            if (i != last_i || j != last_j) {
+                if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+                    grid[i * GRID_W + j] = 1;
+                } else if (IsMouseButtonDown(MOUSE_RIGHT_BUTTON)) {
+                    grid[i * GRID_W + j] = 0;
+                }
+
+                last_i = i;
+                last_j = j;
+            }
+            is_dragging = true;
+        }
+    } else {
+        is_dragging = false;
+        last_i = -1;
+        last_j = -1;
+    }
 }
 
 int main(void) {
@@ -68,19 +97,20 @@ int main(void) {
         grid[i] = GetRandomValue(0, 1);
     }
 
-    float cell_size = WND_H / GRID_H * 0.90; 
+    float cell_size = WND_H / GRID_H * 0.9; 
     int offset = ceilf(cell_size * 0.01);
 
-    float update_interval = 0.1f; 
+    float update_interval = 0.1f;
     float time_since_last_update = 0.0f;
 
     while (!WindowShouldClose()) {
         if (IsKeyReleased(KEY_SPACE)) {
             is_running = !is_running;
         }
+        handle_mouse_drag(grid, cell_size, offset);
+
         float delta_time = GetFrameTime();
         time_since_last_update += delta_time;
-
         if (time_since_last_update >= update_interval && is_running) {
             update_grid(grid, new_grid);
 
@@ -102,5 +132,4 @@ int main(void) {
     CloseWindow();
     return 0;
 }
-
 
