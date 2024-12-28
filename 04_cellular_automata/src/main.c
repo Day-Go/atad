@@ -1,11 +1,14 @@
 #include <math.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include "raylib.h"
 
 const int WND_H = 900;
 const int WND_W = 1600;
 const int GRID_W = 32;
 const int GRID_H = 32;
+
+bool is_running = true;
 
 int draw_grid(float cell_size, float offset, int *grid) {
     int pos_y = 8;
@@ -51,6 +54,10 @@ void update_grid(int *grid, int *new_grid) {
     }
 }
 
+bool toggle_pause() {
+    return !is_running;
+}
+
 int main(void) {
     InitWindow(WND_W, WND_H, "Falling Sand");
 
@@ -68,10 +75,13 @@ int main(void) {
     float time_since_last_update = 0.0f;
 
     while (!WindowShouldClose()) {
+        if (IsKeyReleased(KEY_SPACE)) {
+            is_running = !is_running;
+        }
         float delta_time = GetFrameTime();
         time_since_last_update += delta_time;
 
-        if (time_since_last_update >= update_interval) {
+        if (time_since_last_update >= update_interval && is_running) {
             update_grid(grid, new_grid);
 
             int *temp = grid;
