@@ -1,4 +1,5 @@
 #include <math.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -10,7 +11,7 @@ const int WND_W = 1600;
 const int GRID_H = 880;
 const int GRID_W = WND_W - UI_PANEL_W;
 const int GRID_PADDING = 10;  
-const int CELL_SIZE = 20;
+const int CELL_SIZE = 10;
 
 bool is_running = true;
 
@@ -23,7 +24,7 @@ typedef enum {
 } Element; 
 
 Element selected_element = SAND;
-
+float brush_radius = 20.0f;
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~    RENDERING    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 void initialize_cell_layout(int *cell_x_positions, int *cell_y_positions, int rows, int cols) {
@@ -119,6 +120,12 @@ void update_grid(int *grid, int *new_grid, int rows, int cols, int *neighbor_arr
         }
     }
 
+    static bool seeded = false;
+    if (!seeded) {
+        srand(time(NULL));
+        seeded = true;
+    }
+
     // update the grid
     for (int i = 0; i < rows; i++) {
         for (int j = 0; j < cols; j++) {
@@ -132,13 +139,38 @@ void update_grid(int *grid, int *new_grid, int rows, int cols, int *neighbor_arr
                         new_grid[idx] = SAND;
                         break;
                     }
-                    // sand with nothing below moves directly down
+
+                    // sand falls directly down if nothing below
                     int bottom_idx = neighbor_array[idx * 8 + 6];
                     if (grid[bottom_idx] == NONE) {
                         new_grid[idx] = NONE;
                         new_grid[bottom_idx] = SAND;
+                        break;
                     }
 
+                    int bl_idx = neighbor_array[idx * 8 + 5];
+                    int br_idx = neighbor_array[idx * 8 + 7];
+
+                    bool can_fall_left = (bl_idx != -1 && grid[bl_idx] == NONE);
+                    bool can_fall_right = (br_idx != -1 && grid[br_idx] == NONE);
+
+                    if (can_fall_left && can_fall_right) {
+                        if (rand() % 2 == 0) {
+                            new_grid[idx] = NONE;
+                            new_grid[bl_idx] = SAND;
+                        } else {
+                            new_grid[idx] = NONE;
+                            new_grid[br_idx] = SAND;
+                        }
+                    } else if (can_fall_left) {
+                        new_grid[idx] = NONE;
+                        new_grid[bl_idx] = SAND;
+                    } else if (can_fall_right) {
+                        new_grid[idx] = NONE;
+                        new_grid[br_idx] = SAND;
+                    } else {
+                        new_grid[idx] = SAND;
+                    }
                     break;
 
                 case WATER:
@@ -169,19 +201,19 @@ void handle_mouse_drag(int *grid, int *cell_x_positions, int *cell_y_positions, 
     if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
         Vector2 mouse_pos = GetMousePosition();
 
-        int i = -1, j = -1;
-        for (int idx = 0; idx < rows * cols; idx++) {
-            if (mouse_pos.x >= cell_x_positions[idx] && mouse_pos.x < cell_x_positions[idx] + CELL_SIZE &&
-                mouse_pos.y >= cell_y_positions[idx] && mouse_pos.y < cell_y_positions[idx] + CELL_SIZE) {
-                i = idx / cols;
-                j = idx % cols;
-                break;
+        for (int i = 0; i < rows; i++) {
+            for (int j = 0; j < cols; j++) {
+                int idx = i * cols + j;
+                float cell_center_x = cell_x_positions[idx] + CELL_SIZE / 2.0f;
+                float cell_center_y = cell_y_positions[idx] + CELL_SIZE / 2.0f;
+
+                float distance = sqrtf((mouse_pos.x - cell_center_x) * (mouse_pos.x - cell_center_x) +
+                                       (mouse_pos.y - cell_center_y) * (mouse_pos.y - cell_center_y));
+
+                if (distance <= brush_radius) {
+                    grid[idx] = selected_element;
+                }
             }
-        }
-
-        if (i >= 0 && i < rows && j >= 0 && j < cols){
-            grid[i * cols + j] = selected_element;
-
         }
     }
 }
@@ -205,7 +237,6 @@ void fire_button_pressed() {
     selected_element = FIRE;
     TraceLog(LOG_INFO, "Fire button pressed!");
 }
-
 
 void draw_buttons(float grid_width, float remaining_width) {
     Rectangle buttonSand = { grid_width, 50, remaining_width, 50 };
@@ -245,6 +276,26 @@ void handle_button_input(float grid_width, float remaining_width) {
     }
 }
 
+void draw_brush_outline() {
+    Vector2 mouse_pos = GetMousePosition();
+    DrawCircleLines(mouse_pos.x, mouse_pos.y, brush_radius, RED);
+}
+
+void draw_brush_slider() {
+    Rectangle slider = { WND_W - UI_PANEL_W + 50, WND_H - 50, UI_PANEL_W - 100, 20 };
+    DrawRectangleRec(slider, LIGHTGRAY);
+    float slider_value = (brush_radius - 10.0f) / 90.0f; // normalize radius
+    DrawRectangle(slider.x + slider_value * (slider.width - 10), slider.y, 10, slider.height, DARKGRAY);
+
+    if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+        Vector2 mouse_pos = GetMousePosition();
+        if (CheckCollisionPointRec(mouse_pos, slider)) {
+            float value = (mouse_pos.x - slider.x) / slider.width;
+            brush_radius = 10.0f + value * 90.0f; // scale back to 10-100
+        }
+    }
+}
+
 int main(void) {
     InitWindow(WND_W, WND_H, "Falling Sand");
 
@@ -280,8 +331,6 @@ int main(void) {
         float delta_time = GetFrameTime();
         time_since_last_update += delta_time;
         if (time_since_last_update >= update_interval && is_running) {
-            handle_mouse_drag(grid, cell_x_positions, cell_y_positions, rows, cols);
-
             update_grid(grid, new_grid, rows, cols, neighbor_array);
 
             int *temp = grid;
@@ -289,20 +338,19 @@ int main(void) {
             new_grid = temp;
 
             time_since_last_update = 0.0f;
+            handle_mouse_drag(grid, cell_x_positions, cell_y_positions, rows, cols);
         }
 
         BeginDrawing();
         ClearBackground(RAYWHITE);
         draw_grid(grid, cell_x_positions, cell_y_positions, rows, cols);
-        
+
         draw_buttons(GRID_W, UI_PANEL_W);
+        draw_brush_outline();
+        draw_brush_slider();
         EndDrawing();
 
         handle_button_input(GRID_W, UI_PANEL_W);
-
-        //if (IsWindowResized()) {
-        //    initialize_cell_layout(cell_x_positions, cell_y_positions, rows, cols);
-        //}
     }
 
     free(grid);
@@ -312,5 +360,4 @@ int main(void) {
     CloseWindow();
     return 0;
 }
-
 
