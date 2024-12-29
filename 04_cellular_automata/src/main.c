@@ -4,18 +4,13 @@
 #include <stdbool.h>
 #include "raylib.h"
 
+const int UI_PANEL_W = 300;
 const int WND_H = 900;
 const int WND_W = 1600;
-const int GRID_W = 64;
-const int GRID_H = 64;
-
-// order: tl, top, tr, left, right, bl, bottom, br
-#define N_NEIGHBORS 8
-const int CELL_OFFSETS[N_NEIGHBORS] = {
-    -GRID_W - 1, -GRID_W, -GRID_W + 1,
-    -1, 1,
-    GRID_W - 1, GRID_W, GRID_W + 1
-};
+const int GRID_H = 880;
+const int GRID_W = WND_W - UI_PANEL_W;
+const int GRID_PADDING = 10;  
+const int CELL_SIZE = 20;
 
 bool is_running = true;
 
@@ -31,25 +26,25 @@ Element selected_element = SAND;
 
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~    RENDERING    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-void initialize_cell_layout(int *cell_x_positions, int *cell_y_positions, int rows, int cols, float cell_size) {
+void initialize_cell_layout(int *cell_x_positions, int *cell_y_positions, int rows, int cols) {
     for (int i = 0; i < rows; i++) {
         for (int j = 0; j < cols; j++) {
-            cell_x_positions[i * cols + j] = 8 + j * (cell_size);
-            cell_y_positions[i * cols + j] = 8 + i * (cell_size);
+            cell_x_positions[i * cols + j] = GRID_PADDING + j * CELL_SIZE;
+            cell_y_positions[i * cols + j] = GRID_PADDING + i * CELL_SIZE;
         }
     }
 }
 
-int draw_grid(float cell_size, int *grid, int *cell_x_positions, int *cell_y_positions) {
-    for (int i = 0; i < GRID_H; i++) {
-        for (int j = 0; j < GRID_W; j++) {
-            int idx = i * GRID_W + j;
+int draw_grid(int *grid, int *cell_x_positions, int *cell_y_positions, int rows, int cols) {
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            int idx = i * cols + j;
             Element current_cell = grid[idx];
 
             Color cell_color = PURPLE;
             switch (current_cell) {
                 case NONE:
-                    cell_color = RAYWHITE;
+                    cell_color = WHITE;
                     break;
                 case SAND:
                     cell_color = BEIGE;
@@ -65,7 +60,12 @@ int draw_grid(float cell_size, int *grid, int *cell_x_positions, int *cell_y_pos
                     break;
             }
 
-            DrawRectangle(cell_x_positions[i * GRID_W + j], cell_y_positions[i * GRID_W + j], cell_size, cell_size, cell_color);
+            DrawRectangle(
+                cell_x_positions[idx], 
+                cell_y_positions[idx], 
+                CELL_SIZE, CELL_SIZE, 
+                cell_color
+            );
         }
     }
     return 0;
@@ -87,47 +87,30 @@ int count_live_neighbors(int *grid, int i, int j) {
     return live_neighbors;
 }
 
-void update_grid(int *grid, int *new_grid) {
+void update_grid(int *grid, int *new_grid, int rows, int cols) {
     // initialize the new grid with the current grid state
-    for (int i = 0; i < GRID_H; i++) {
-        for (int j = 0; j < GRID_W; j++) {
-            int idx = i * GRID_W + j;
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            int idx = i * cols + j;
             new_grid[idx] = grid[idx];
         }
     }
 
     // update the grid
-    for (int i = 0; i < GRID_H; i++) {
-        for (int j = 0; j < GRID_W; j++) {
-            int idx = i * GRID_W + j;
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            int idx = i * cols + j;
             Element current_cell = grid[idx];
 
             switch (current_cell) {
                 case SAND:
                     // sand on the bottom row sits
-                    if (i == GRID_H - 1) {
+                    if (i == rows - 1) {
                         new_grid[idx] = SAND;
                         break;
                     }
 
                     // sand with nothing below moves directly down
-                    if (i < GRID_H - 1 && grid[idx + CELL_OFFSETS[6]] == NONE) {
-                        new_grid[idx + CELL_OFFSETS[6]] = SAND;
-                        new_grid[idx] = NONE;
-                        break;
-                    }
-
-                    // sand with sand below tries to fall to the sides
-                    if (i < GRID_H - 1 && grid[idx + CELL_OFFSETS[6]] == SAND) {
-                        if (j > 0 && grid[idx + CELL_OFFSETS[5]] == NONE) {
-                            new_grid[idx + CELL_OFFSETS[5]] = SAND;
-                            new_grid[idx] = NONE;
-                        }
-                        else if (j < GRID_W - 1 && grid[idx + CELL_OFFSETS[7]] == NONE) {
-                            new_grid[idx + CELL_OFFSETS[7]] = SAND;
-                            new_grid[idx] = NONE;
-                        }
-                    }
                     break;
 
                 case WATER:
@@ -145,32 +128,32 @@ void update_grid(int *grid, int *new_grid) {
         }
     }
 
-    for (int i = 0; i < GRID_H; i++) {
-        for (int j = 0; j < GRID_W; j++) {
-            int idx = i * GRID_W + j;
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            int idx = i * cols + j;
             grid[idx] = new_grid[idx];
         }
     }
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~    UI    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-void handle_mouse_drag(int *grid, float cell_size, int *cell_x_positions, int *cell_y_positions) {
+void handle_mouse_drag(int *grid, int *cell_x_positions, int *cell_y_positions, int rows, int cols) {
 
     if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
         Vector2 mouse_pos = GetMousePosition();
 
         int i = -1, j = -1;
-        for (int idx = 0; idx < GRID_H * GRID_W; idx++) {
-            if (mouse_pos.x >= cell_x_positions[idx] && mouse_pos.x < cell_x_positions[idx] + cell_size &&
-                mouse_pos.y >= cell_y_positions[idx] && mouse_pos.y < cell_y_positions[idx] + cell_size) {
-                i = idx / GRID_W;
-                j = idx % GRID_W;
+        for (int idx = 0; idx < rows * cols; idx++) {
+            if (mouse_pos.x >= cell_x_positions[idx] && mouse_pos.x < cell_x_positions[idx] + CELL_SIZE &&
+                mouse_pos.y >= cell_y_positions[idx] && mouse_pos.y < cell_y_positions[idx] + CELL_SIZE) {
+                i = idx / cols;
+                j = idx % cols;
                 break;
             }
         }
 
-        if (i >= 0 && i < GRID_H && j >= 0 && j < GRID_W) {
-            grid[i * GRID_W + j] = selected_element;
+        if (i >= 0 && i < rows && j >= 0 && j < cols){
+            grid[i * cols + j] = selected_element;
 
         }
     }
@@ -243,19 +226,20 @@ int main(void) {
     float time_since_last_update = 0.0f; 
 
     // setup CA grid
-    int *grid = (int *)malloc(GRID_H * GRID_W * sizeof(int));
-    int *new_grid = (int *)malloc(GRID_H * GRID_W * sizeof(int));
+    int cols = (int)(GRID_W / CELL_SIZE);
+    int rows = (int)(GRID_H / CELL_SIZE);
+    printf("%i\n", cols);
+    printf("%i\n", rows);
+    int *grid = (int *)malloc(rows * cols * sizeof(int));
 
-    int *cell_x_positions = (int *)malloc(GRID_H * GRID_W * sizeof(int));
-    int *cell_y_positions = (int *)malloc(GRID_H * GRID_W * sizeof(int));
-    float cell_size = WND_H / GRID_H * 0.9;
+    int *new_grid = (int *)malloc(rows* cols * sizeof(int));
 
-    float grid_width = 8 + GRID_W * (cell_size);
-    float remaining_width = WND_W - grid_width;
+    int *cell_x_positions = (int *)malloc(rows * cols * sizeof(int));
+    int *cell_y_positions = (int *)malloc(rows * cols * sizeof(int));
 
-    initialize_cell_layout(cell_x_positions, cell_y_positions, GRID_H, GRID_W, cell_size);
+    initialize_cell_layout(cell_x_positions, cell_y_positions, rows, cols);
 
-    for (int i = 0; i < GRID_H * GRID_W; i++) {
+    for (int i = 0; i < rows * cols; i++) {
         grid[i] = NONE;
     }
 
@@ -267,9 +251,9 @@ int main(void) {
         float delta_time = GetFrameTime();
         time_since_last_update += delta_time;
         if (time_since_last_update >= update_interval && is_running) {
-            handle_mouse_drag(grid, cell_size, cell_x_positions, cell_y_positions);
+            handle_mouse_drag(grid, cell_x_positions, cell_y_positions, rows, cols);
 
-            update_grid(grid, new_grid);
+            update_grid(grid, new_grid, rows, cols);
 
             int *temp = grid;
             grid = new_grid;
@@ -280,18 +264,16 @@ int main(void) {
 
         BeginDrawing();
         ClearBackground(RAYWHITE);
-        draw_grid(cell_size, grid, cell_x_positions, cell_y_positions);
-        draw_buttons(grid_width, remaining_width);
+        draw_grid(grid, cell_x_positions, cell_y_positions, rows, cols);
+        
+        draw_buttons(GRID_W, UI_PANEL_W);
         EndDrawing();
 
-        handle_button_input(grid_width, remaining_width);
+        handle_button_input(GRID_W, UI_PANEL_W);
 
-        if (IsWindowResized()) {
-            cell_size = GetScreenHeight() / GRID_H * 0.9;
-            grid_width = 8 + GRID_W * cell_size;
-            remaining_width = WND_W - grid_width;
-            initialize_cell_layout(cell_x_positions, cell_y_positions, GRID_H, GRID_W, cell_size);
-        }
+        //if (IsWindowResized()) {
+        //    initialize_cell_layout(cell_x_positions, cell_y_positions, rows, cols);
+        //}
     }
 
     free(grid);
