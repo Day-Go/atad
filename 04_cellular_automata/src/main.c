@@ -1,9 +1,12 @@
 #include <math.h>
 #include <time.h>
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include "raylib.h"
+
+#define min(a,b) ((a) < (b) ? (a) : (b))
 
 const int UI_PANEL_W = 400;
 const int WND_H = 900;
@@ -11,9 +14,12 @@ const int WND_W = 1600;
 const int GRID_H = 880;
 const int GRID_W = WND_W - UI_PANEL_W;
 const int GRID_PADDING = 10;  
-const int CELL_SIZE = 10;
+const int CELL_SIZE = 4;
 
 bool is_running = true;
+
+#define MAX_TEMPERATURE 1000
+#define MIN_TEMPERATURE 0
 
 typedef enum {
     NONE,
@@ -22,6 +28,14 @@ typedef enum {
     ROCK,
     FIRE
 } Element; 
+
+typedef struct {
+    Element type;
+    int temperature;
+    float velocity_x;
+    float velocity_y;
+    bool updated_this_frame;
+} Cell;
 
 Element selected_element = SAND;
 float brush_radius = 20.0f;
@@ -59,11 +73,11 @@ int* generate_neighbor_array(int rows, int cols) {
     return neighbor_array;
 }
 
-int draw_grid(int *grid, int *cell_x_positions, int *cell_y_positions, int rows, int cols) {
+int draw_grid(Cell *grid, int *cell_x_positions, int *cell_y_positions, int rows, int cols) {
     for (int i = 0; i < rows; i++) {
         for (int j = 0; j < cols; j++) {
             int idx = i * cols + j;
-            Element current_cell = grid[idx];
+            Element current_cell = grid[idx].type;
 
             Color cell_color = PURPLE;
             switch (current_cell) {
@@ -72,12 +86,20 @@ int draw_grid(int *grid, int *cell_x_positions, int *cell_y_positions, int rows,
                     break;
                 case SAND:
                     cell_color = BEIGE;
+                    // Darken color based on temperature
+                    if (grid[idx].temperature > 400) {
+                        cell_color.r = min(255, cell_color.r + (grid[idx].temperature - 400) / 2);
+                    }
                     break;
                 case WATER:
                     cell_color = BLUE;
                     break;
                 case ROCK:
                     cell_color = GRAY;
+                    // Redden color based on temperature
+                    if (grid[idx].temperature > 600) {
+                        cell_color.r = min(255, cell_color.r + (grid[idx].temperature - 600) / 2);
+                    }
                     break;
                 case FIRE:
                     cell_color = RED;
@@ -111,93 +133,246 @@ int count_live_neighbors(int *grid, int i, int j) {
     return live_neighbors;
 }
 
-void update_grid(int *grid, int *new_grid, int rows, int cols, int *neighbor_array) {
-    // initialize the new grid with the current grid state
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            int idx = i * cols + j;
-            new_grid[idx] = grid[idx];
+void swap_cells(Cell *a, Cell *b) {
+    Cell temp = *a;
+    *a = *b;
+    *b = temp;
+}
+
+float calculate_water_pressure(Cell *grid, int idx, int rows, int cols, int *neighbor_array) {
+    int water_column = 0;
+    int current = idx;
+    
+    while (current >= cols) {
+        int above = neighbor_array[current * 8 + 1];
+        if (above == -1 || grid[above].type != WATER) break;
+        water_column++;
+        current = above;
+    }
+    
+    return 1.0f + (water_column * 0.2f);
+}
+
+void update_sand(Cell *grid, Cell *new_grid, int idx, int rows, int cols, int *neighbor_array) {
+    // Get relevant neighbor indices
+    int below = neighbor_array[idx * 8 +6];  
+    int below_left = neighbor_array[idx * 8 + 5];
+    int below_right = neighbor_array[idx * 8 + 7];
+    
+    // Apply physics and interactions
+    if (below != -1) {
+        // Basic falling
+        if (grid[below].type == NONE) {
+            swap_cells(&new_grid[idx], &new_grid[below]);
+            new_grid[below].velocity_y += 0.5f;  // Accelerate fall
+            new_grid[below].updated_this_frame = true;
+            return;
+        }
+        
+        // Interaction with water (sand sinks)
+        if (grid[below].type == WATER) {
+            swap_cells(&new_grid[idx], &new_grid[below]);
+            new_grid[below].updated_this_frame = true;
+            return;
+        }
+
+        // Diagonal movement with inertia
+        bool can_fall_left = (below_left != -1 && grid[below_left].type == NONE);
+        bool can_fall_right = (below_right != -1 && grid[below_right].type == NONE);
+
+        if (can_fall_left && can_fall_right) {
+            int target = (rand() % 2 == 0) ? below_left : below_right;
+            swap_cells(&new_grid[idx], &new_grid[target]);
+            new_grid[target].updated_this_frame = true;
+        } else if (can_fall_left) {
+            swap_cells(&new_grid[idx], &new_grid[below_left]);
+            new_grid[below_left].updated_this_frame = true;
+        } else if (can_fall_right) {
+            swap_cells(&new_grid[idx], &new_grid[below_right]);
+            new_grid[below_right].updated_this_frame = true;
         }
     }
 
-    static bool seeded = false;
-    if (!seeded) {
-        srand(time(NULL));
-        seeded = true;
+    // Heat interaction
+    if (new_grid[idx].temperature > 800) {
+        new_grid[idx].type = NONE;  // Sand melts at high temperatures
     }
+}
 
-    // update the grid
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            int idx = i * cols + j;
-            Element current_cell = grid[idx];
+void update_water(Cell *grid, Cell *new_grid, int idx, int rows, int cols, int *neighbor_array) {
+    float dispersion_rate = 0.8f;
+    float max_spread = 3.0f;
+    
+    // Get all relevant neighbors for water flow
+    for (int n = 0; n < 8; n++) {
+        int neighbor_idx = neighbor_array[idx * 8 + n];
+        if (neighbor_idx == -1) continue;
 
-            switch (current_cell) {
-                case SAND:
-                    // sand on the bottom row sits
-                    if (i == rows - 1) {
-                        new_grid[idx] = SAND;
-                        break;
-                    }
-
-                    // sand falls directly down if nothing below
-                    int bottom_idx = neighbor_array[idx * 8 + 6];
-                    if (grid[bottom_idx] == NONE) {
-                        new_grid[idx] = NONE;
-                        new_grid[bottom_idx] = SAND;
-                        break;
-                    }
-
-                    int bl_idx = neighbor_array[idx * 8 + 5];
-                    int br_idx = neighbor_array[idx * 8 + 7];
-
-                    bool can_fall_left = (bl_idx != -1 && grid[bl_idx] == NONE);
-                    bool can_fall_right = (br_idx != -1 && grid[br_idx] == NONE);
-
-                    if (can_fall_left && can_fall_right) {
-                        if (rand() % 2 == 0) {
-                            new_grid[idx] = NONE;
-                            new_grid[bl_idx] = SAND;
-                        } else {
-                            new_grid[idx] = NONE;
-                            new_grid[br_idx] = SAND;
-                        }
-                    } else if (can_fall_left) {
-                        new_grid[idx] = NONE;
-                        new_grid[bl_idx] = SAND;
-                    } else if (can_fall_right) {
-                        new_grid[idx] = NONE;
-                        new_grid[br_idx] = SAND;
-                    } else {
-                        new_grid[idx] = SAND;
-                    }
-                    break;
-
-                case WATER:
-                    break;
-
-                case ROCK:
-                    break;
-
-                case FIRE:
-                    break;
-
-                case NONE:
-                    break;
+        // Evaporation near fire
+        if (grid[neighbor_idx].type == FIRE) {
+            if (rand() % 10 == 0) {
+                new_grid[idx].type = NONE;
+                return;
             }
+            continue;
         }
     }
 
-    for (int i = 0; i < rows; i++) {
+    // Apply water physics
+    int below = neighbor_array[idx * 8 + 6];
+    if (below != -1 && grid[below].type == NONE) {
+        // Basic falling with acceleration
+        swap_cells(&new_grid[idx], &new_grid[below]);
+        new_grid[below].velocity_y += 0.2f;
+        new_grid[below].updated_this_frame = true;
+        return;
+    }
+
+    // Horizontal flow with pressure simulation
+    float pressure = calculate_water_pressure(grid, idx, rows, cols, neighbor_array);
+    float spread_distance = min(pressure * dispersion_rate, max_spread);
+    
+    for (int spread = 1; spread <= (int)spread_distance; spread++) {
+        int left_idx = neighbor_array[idx * 8 + 3];  
+        int right_idx = neighbor_array[idx * 8 + 4]; 
+        
+        if (left_idx != -1 && grid[left_idx].type == NONE && !grid[left_idx].updated_this_frame) {
+            swap_cells(&new_grid[idx], &new_grid[left_idx]);
+            new_grid[left_idx].velocity_x = -spread_distance;
+            new_grid[left_idx].updated_this_frame = true;
+            break;
+        }
+        
+        if (right_idx != -1 && grid[right_idx].type == NONE && !grid[right_idx].updated_this_frame) {
+            swap_cells(&new_grid[idx], &new_grid[right_idx]);
+            new_grid[right_idx].velocity_x = spread_distance;
+            new_grid[right_idx].updated_this_frame = true;
+            break;
+        }
+    }
+
+    // Temperature effects
+    if (new_grid[idx].temperature <= 0) {
+        new_grid[idx].type = ROCK;  // Water freezes
+    } else if (new_grid[idx].temperature >= 100) {
+        new_grid[idx].type = NONE;  // Water evaporates
+    }
+}
+
+void update_fire(Cell *grid, Cell *new_grid, int idx, int rows, int cols, int *neighbor_array) {
+    int heat_radius = 2;
+    
+    // Natural fire decay
+    if (rand() % 100 < 5) {
+        new_grid[idx].type = NONE;
+        return;
+    }
+
+    // Heat propagation within radius
+    for (int n = 0; n < 8; n++) {
+        int neighbor_idx = neighbor_array[idx * 8 + n];
+        if (neighbor_idx == -1) continue;
+
+        // Heat transfer to neighbors
+        new_grid[neighbor_idx].temperature += (50 / (heat_radius * heat_radius));
+
+        // Interaction with other elements
+        switch (grid[neighbor_idx].type) {
+            case WATER:
+                new_grid[idx].type = NONE;
+                return;
+            case SAND:
+                if (new_grid[neighbor_idx].temperature > 800 && rand() % 100 < 10) {
+                    new_grid[neighbor_idx].type = NONE;
+                }
+                break;
+            case ROCK:
+                if (new_grid[neighbor_idx].temperature > 900) {
+                    new_grid[neighbor_idx].type = FIRE;
+                }
+                break;
+            case FIRE:
+            case NONE:
+                break;
+        }
+    }
+
+    // Fire movement
+    int above = neighbor_array[idx * 8 + 0];
+    if (above != -1 && grid[above].type == NONE && rand() % 100 < 70) {
+        swap_cells(&new_grid[idx], &new_grid[above]);
+        new_grid[above].updated_this_frame = true;
+    }
+}
+
+void update_rock(Cell *grid, Cell *new_grid, int idx, int rows, int cols, int *neighbor_array) {
+    // Rocks only move if unsupported
+    int below = neighbor_array[idx * 8 + 4];
+    if (below == -1) return;
+
+    bool is_supported = false;
+    
+    // Check for support (including diagonals)
+    for (int n = 3; n <= 5; n++) {  // Check bottom-left, bottom, bottom-right
+        int support_idx = neighbor_array[idx * 8 + n];
+        if (support_idx != -1 && (grid[support_idx].type == ROCK || grid[support_idx].type == SAND)) {
+            is_supported = true;
+            break;
+        }
+    }
+
+    if (!is_supported && grid[below].type == NONE) {
+        swap_cells(&new_grid[idx], &new_grid[below]);
+        new_grid[below].updated_this_frame = true;
+    }
+
+    // Temperature effects - rocks melt at very high temperatures
+    if (new_grid[idx].temperature > 900) {
+        new_grid[idx].type = FIRE;
+    }
+}
+
+void update_grid(Cell *grid, Cell *new_grid, int rows, int cols, int *neighbor_array) {
+    // Reset update flags
+    for (int i = 0; i < rows * cols; i++) {
+        grid[i].updated_this_frame = false;
+        new_grid[i] = grid[i];
+    }
+
+    // Update from bottom to top for gravity-based elements
+    for (int i = rows - 1; i >= 0; i--) {
         for (int j = 0; j < cols; j++) {
             int idx = i * cols + j;
-            grid[idx] = new_grid[idx];
+            if (grid[idx].updated_this_frame) continue;
+
+            switch (grid[idx].type) {
+                case SAND: {
+                    update_sand(grid, new_grid, idx, rows, cols, neighbor_array);
+                    break;
+                }
+                case WATER: {
+                    update_water(grid, new_grid, idx, rows, cols, neighbor_array);
+                    break;
+                }
+                case FIRE: {
+                    update_fire(grid, new_grid, idx, rows, cols, neighbor_array);
+                    break;
+                }
+                case ROCK: {
+                    update_rock(grid, new_grid, idx, rows, cols, neighbor_array);
+                    break;
+                }
+                case NONE: {
+                    break; // Empty cells don't need updating
+                }
+            }
         }
     }
 }
 
+
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~    UI    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-void handle_mouse_drag(int *grid, int *cell_x_positions, int *cell_y_positions, int rows, int cols) {
+void handle_mouse_drag(Cell *grid, int *cell_x_positions, int *cell_y_positions, int rows, int cols) {
     if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
         Vector2 mouse_pos = GetMousePosition();
 
@@ -208,10 +383,14 @@ void handle_mouse_drag(int *grid, int *cell_x_positions, int *cell_y_positions, 
                 float cell_center_y = cell_y_positions[idx] + CELL_SIZE / 2.0f;
 
                 float distance = sqrtf((mouse_pos.x - cell_center_x) * (mouse_pos.x - cell_center_x) +
-                                       (mouse_pos.y - cell_center_y) * (mouse_pos.y - cell_center_y));
+                                    (mouse_pos.y - cell_center_y) * (mouse_pos.y - cell_center_y));
 
                 if (distance <= brush_radius) {
-                    grid[idx] = selected_element;
+                    grid[idx].type = selected_element;
+                    grid[idx].temperature = 20; // room temperature
+                    grid[idx].velocity_x = 0;
+                    grid[idx].velocity_y = 0;
+                    grid[idx].updated_this_frame = false;
                 }
             }
         }
@@ -299,18 +478,28 @@ void draw_brush_slider() {
 int main(void) {
     InitWindow(WND_W, WND_H, "Falling Sand");
 
-    int fps = 20;
+    int fps = 60;
     float update_interval = 1.0f / fps;
     float time_since_last_update = 0.0f; 
 
     // setup CA grid
     int cols = (int)(GRID_W / CELL_SIZE);
     int rows = (int)(GRID_H / CELL_SIZE);
-    printf("%i\n", cols);
-    printf("%i\n", rows);
-    int *grid = (int *)malloc(rows * cols * sizeof(int));
 
-    int *new_grid = (int *)malloc(rows* cols * sizeof(int));
+    Cell *grid = (Cell *)malloc(rows * cols * sizeof(Cell));
+    Cell *new_grid = (Cell *)malloc(rows * cols * sizeof(Cell));
+
+    // Initialize all cells
+    for (int i = 0; i < rows * cols; i++) {
+        grid[i] = (Cell){
+            .type = NONE,
+            .temperature = 20, // room temperature
+            .velocity_x = 0,
+            .velocity_y = 0,
+            .updated_this_frame = false
+        };
+        new_grid[i] = grid[i];
+    }
 
     int *cell_x_positions = (int *)malloc(rows * cols * sizeof(int));
     int *cell_y_positions = (int *)malloc(rows * cols * sizeof(int));
@@ -318,10 +507,6 @@ int main(void) {
     initialize_cell_layout(cell_x_positions, cell_y_positions, rows, cols);
 
     int *neighbor_array = generate_neighbor_array(rows, cols);
-
-    for (int i = 0; i < rows * cols; i++) {
-        grid[i] = NONE;
-    }
 
     while (!WindowShouldClose()) {
         if (IsKeyReleased(KEY_SPACE)) {
@@ -333,7 +518,7 @@ int main(void) {
         if (time_since_last_update >= update_interval && is_running) {
             update_grid(grid, new_grid, rows, cols, neighbor_array);
 
-            int *temp = grid;
+            Cell *temp = grid;
             grid = new_grid;
             new_grid = temp;
 
