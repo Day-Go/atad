@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include "raylib.h"
 
-const int UI_PANEL_W = 300;
+const int UI_PANEL_W = 400;
 const int WND_H = 900;
 const int WND_W = 1600;
 const int GRID_H = 880;
@@ -33,6 +33,29 @@ void initialize_cell_layout(int *cell_x_positions, int *cell_y_positions, int ro
             cell_y_positions[i * cols + j] = GRID_PADDING + i * CELL_SIZE;
         }
     }
+}
+
+int* generate_neighbor_array(int rows, int cols) {
+    int *neighbor_array = (int *)malloc(8 * rows * cols * sizeof(int));
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            int idx = i * cols + j;
+            int neighbor_idx = 0;
+            for (int x = -1; x <= 1; x++) {
+                for (int y = -1; y <= 1; y++) {
+                    if (x == 0 && y == 0) continue;
+                    int ni = i + x;
+                    int nj = j + y;
+                    if (ni >= 0 && ni < rows && nj >= 0 && nj < cols) {
+                        neighbor_array[idx * 8 + neighbor_idx++] = ni * cols + nj;
+                    } else {
+                        neighbor_array[idx * 8 + neighbor_idx++] = -1; // Invalid neighbor
+                    }
+                }
+            }
+        }
+    }
+    return neighbor_array;
 }
 
 int draw_grid(int *grid, int *cell_x_positions, int *cell_y_positions, int rows, int cols) {
@@ -87,7 +110,7 @@ int count_live_neighbors(int *grid, int i, int j) {
     return live_neighbors;
 }
 
-void update_grid(int *grid, int *new_grid, int rows, int cols) {
+void update_grid(int *grid, int *new_grid, int rows, int cols, int *neighbor_array) {
     // initialize the new grid with the current grid state
     for (int i = 0; i < rows; i++) {
         for (int j = 0; j < cols; j++) {
@@ -109,8 +132,13 @@ void update_grid(int *grid, int *new_grid, int rows, int cols) {
                         new_grid[idx] = SAND;
                         break;
                     }
-
                     // sand with nothing below moves directly down
+                    int bottom_idx = neighbor_array[idx * 8 + 6];
+                    if (grid[bottom_idx] == NONE) {
+                        new_grid[idx] = NONE;
+                        new_grid[bottom_idx] = SAND;
+                    }
+
                     break;
 
                 case WATER:
@@ -138,7 +166,6 @@ void update_grid(int *grid, int *new_grid, int rows, int cols) {
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~    UI    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 void handle_mouse_drag(int *grid, int *cell_x_positions, int *cell_y_positions, int rows, int cols) {
-
     if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
         Vector2 mouse_pos = GetMousePosition();
 
@@ -239,6 +266,8 @@ int main(void) {
 
     initialize_cell_layout(cell_x_positions, cell_y_positions, rows, cols);
 
+    int *neighbor_array = generate_neighbor_array(rows, cols);
+
     for (int i = 0; i < rows * cols; i++) {
         grid[i] = NONE;
     }
@@ -253,7 +282,7 @@ int main(void) {
         if (time_since_last_update >= update_interval && is_running) {
             handle_mouse_drag(grid, cell_x_positions, cell_y_positions, rows, cols);
 
-            update_grid(grid, new_grid, rows, cols);
+            update_grid(grid, new_grid, rows, cols, neighbor_array);
 
             int *temp = grid;
             grid = new_grid;
