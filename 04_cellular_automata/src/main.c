@@ -14,7 +14,7 @@ const int WND_W = 1600;
 const int GRID_H = 880;
 const int GRID_W = WND_W - UI_PANEL_W;
 const int GRID_PADDING = 10;  
-const int CELL_SIZE = 4;
+const int CELL_SIZE = 8;
 
 bool is_running = true;
 
@@ -154,29 +154,31 @@ float calculate_water_pressure(Cell *grid, int idx, int rows, int cols, int *nei
 }
 
 void update_sand(Cell *grid, Cell *new_grid, int idx, int rows, int cols, int *neighbor_array) {
-    // Get relevant neighbor indices
-    int below = neighbor_array[idx * 8 +6];  
+    int below = neighbor_array[idx * 8 + 6];
     int below_left = neighbor_array[idx * 8 + 5];
     int below_right = neighbor_array[idx * 8 + 7];
-    
-    // Apply physics and interactions
+
     if (below != -1) {
-        // Basic falling
         if (grid[below].type == NONE) {
             swap_cells(&new_grid[idx], &new_grid[below]);
-            new_grid[below].velocity_y += 0.5f;  // Accelerate fall
             new_grid[below].updated_this_frame = true;
-            return;
-        }
-        
-        // Interaction with water (sand sinks)
-        if (grid[below].type == WATER) {
-            swap_cells(&new_grid[idx], &new_grid[below]);
-            new_grid[below].updated_this_frame = true;
+            new_grid[below].velocity_y = 1.0f;
             return;
         }
 
-        // Diagonal movement with inertia
+        // interaction with water (sand sinks)
+        if (grid[below].type == WATER) {
+            swap_cells(&new_grid[idx], &new_grid[below]);
+            new_grid[below].updated_this_frame = true;
+            new_grid[below].velocity_y = 0.5f;
+            return;
+        }
+
+        if (grid[below].type == SAND && grid[idx].velocity_y > 0.0f) {
+            swap_cells(&new_grid[idx], &new_grid[below]);
+            return;
+        }
+        // check if stationary
         bool can_fall_left = (below_left != -1 && grid[below_left].type == NONE);
         bool can_fall_right = (below_right != -1 && grid[below_right].type == NONE);
 
@@ -192,69 +194,64 @@ void update_sand(Cell *grid, Cell *new_grid, int idx, int rows, int cols, int *n
             new_grid[below_right].updated_this_frame = true;
         }
     }
-
-    // Heat interaction
-    if (new_grid[idx].temperature > 800) {
-        new_grid[idx].type = NONE;  // Sand melts at high temperatures
-    }
 }
 
 void update_water(Cell *grid, Cell *new_grid, int idx, int rows, int cols, int *neighbor_array) {
-    float dispersion_rate = 0.8f;
-    float max_spread = 3.0f;
-    
-    // Get all relevant neighbors for water flow
-    for (int n = 0; n < 8; n++) {
-        int neighbor_idx = neighbor_array[idx * 8 + n];
-        if (neighbor_idx == -1) continue;
-
-        // Evaporation near fire
-        if (grid[neighbor_idx].type == FIRE) {
-            if (rand() % 10 == 0) {
-                new_grid[idx].type = NONE;
-                return;
-            }
-            continue;
-        }
-    }
-
-    // Apply water physics
     int below = neighbor_array[idx * 8 + 6];
+    int below_left = neighbor_array[idx * 8 + 5];
+    int below_right = neighbor_array[idx * 8 + 7];
+    int left = neighbor_array[idx * 8 + 3];
+    int right = neighbor_array[idx * 8 + 4];
+
+    // Calculate water pressure (affects spread rate)
+    float pressure = calculate_water_pressure(grid, idx, rows, cols, neighbor_array);
+
+    // Primary downward movement
     if (below != -1 && grid[below].type == NONE) {
-        // Basic falling with acceleration
         swap_cells(&new_grid[idx], &new_grid[below]);
-        new_grid[below].velocity_y += 0.2f;
         new_grid[below].updated_this_frame = true;
         return;
     }
 
-    // Horizontal flow with pressure simulation
-    float pressure = calculate_water_pressure(grid, idx, rows, cols, neighbor_array);
-    float spread_distance = min(pressure * dispersion_rate, max_spread);
-    
-    for (int spread = 1; spread <= (int)spread_distance; spread++) {
-        int left_idx = neighbor_array[idx * 8 + 3];  
-        int right_idx = neighbor_array[idx * 8 + 4]; 
-        
-        if (left_idx != -1 && grid[left_idx].type == NONE && !grid[left_idx].updated_this_frame) {
-            swap_cells(&new_grid[idx], &new_grid[left_idx]);
-            new_grid[left_idx].velocity_x = -spread_distance;
-            new_grid[left_idx].updated_this_frame = true;
-            break;
+    // Diagonal falling with randomization
+    bool can_fall_left = (below_left != -1 && grid[below_left].type == NONE);
+    bool can_fall_right = (below_right != -1 && grid[below_right].type == NONE);
+
+    if (can_fall_left || can_fall_right) {
+        int target;
+        if (can_fall_left && can_fall_right) {
+            target = (rand() % 2 == 0) ? below_left : below_right;
+        } else {
+            target = can_fall_left ? below_left : below_right;
         }
-        
-        if (right_idx != -1 && grid[right_idx].type == NONE && !grid[right_idx].updated_this_frame) {
-            swap_cells(&new_grid[idx], &new_grid[right_idx]);
-            new_grid[right_idx].velocity_x = spread_distance;
-            new_grid[right_idx].updated_this_frame = true;
-            break;
+        swap_cells(&new_grid[idx], &new_grid[target]);
+        new_grid[target].updated_this_frame = true;
+        return;
+    }
+
+    // Horizontal spread with pressure
+    if (below != -1 && grid[below].type != NONE) {
+        bool can_move_left = (left != -1 && grid[left].type == NONE);
+        bool can_move_right = (right != -1 && grid[right].type == NONE);
+
+        // Apply pressure to spreading
+        if (rand() % 100 < pressure * 80) {  // Higher pressure = more likely to spread
+            if (can_move_left && can_move_right) {
+                int target = (rand() % 2 == 0) ? left : right;
+                swap_cells(&new_grid[idx], &new_grid[target]);
+                new_grid[target].updated_this_frame = true;
+            } else if (can_move_left) {
+                swap_cells(&new_grid[idx], &new_grid[left]);
+                new_grid[left].updated_this_frame = true;
+            } else if (can_move_right) {
+                swap_cells(&new_grid[idx], &new_grid[right]);
+                new_grid[right].updated_this_frame = true;
+            }
         }
     }
 
     // Temperature effects
-    if (new_grid[idx].temperature <= 0) {
-        new_grid[idx].type = ROCK;  // Water freezes
-    } else if (new_grid[idx].temperature >= 100) {
+    if (new_grid[idx].temperature >= 100) {
         new_grid[idx].type = NONE;  // Water evaporates
     }
 }
@@ -298,7 +295,7 @@ void update_fire(Cell *grid, Cell *new_grid, int idx, int rows, int cols, int *n
     }
 
     // Fire movement
-    int above = neighbor_array[idx * 8 + 0];
+    int above = neighbor_array[idx * 8 + 1];
     if (above != -1 && grid[above].type == NONE && rand() % 100 < 70) {
         swap_cells(&new_grid[idx], &new_grid[above]);
         new_grid[above].updated_this_frame = true;
@@ -387,7 +384,7 @@ void handle_mouse_drag(Cell *grid, int *cell_x_positions, int *cell_y_positions,
 
                 if (distance <= brush_radius) {
                     grid[idx].type = selected_element;
-                    grid[idx].temperature = 20; // room temperature
+                    grid[idx].temperature = 20;
                     grid[idx].velocity_x = 0;
                     grid[idx].velocity_y = 0;
                     grid[idx].updated_this_frame = false;
@@ -463,14 +460,14 @@ void draw_brush_outline() {
 void draw_brush_slider() {
     Rectangle slider = { WND_W - UI_PANEL_W + 50, WND_H - 50, UI_PANEL_W - 100, 20 };
     DrawRectangleRec(slider, LIGHTGRAY);
-    float slider_value = (brush_radius - 10.0f) / 90.0f; // normalize radius
+    float slider_value = (brush_radius - 4.0f) / 90.0f; // normalize radius
     DrawRectangle(slider.x + slider_value * (slider.width - 10), slider.y, 10, slider.height, DARKGRAY);
 
     if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
         Vector2 mouse_pos = GetMousePosition();
         if (CheckCollisionPointRec(mouse_pos, slider)) {
             float value = (mouse_pos.x - slider.x) / slider.width;
-            brush_radius = 10.0f + value * 90.0f; // scale back to 10-100
+            brush_radius = 4.0f + value * 90.0f; // scale back to 10-100
         }
     }
 }
@@ -478,7 +475,7 @@ void draw_brush_slider() {
 int main(void) {
     InitWindow(WND_W, WND_H, "Falling Sand");
 
-    int fps = 60;
+    int fps = 5;
     float update_interval = 1.0f / fps;
     float time_since_last_update = 0.0f; 
 
