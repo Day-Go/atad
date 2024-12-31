@@ -8,13 +8,22 @@
 
 #define min(a,b) ((a) < (b) ? (a) : (b))
 
-const int UI_PANEL_W = 400;
-const int WND_H = 900;
-const int WND_W = 1600;
-const int GRID_H = 880;
+#define NEIGHBOR_TOP          1
+#define NEIGHBOR_TOP_RIGHT    2
+#define NEIGHBOR_RIGHT        4
+#define NEIGHBOR_BOTTOM_RIGHT 7
+#define NEIGHBOR_BOTTOM       6
+#define NEIGHBOR_BOTTOM_LEFT  5
+#define NEIGHBOR_LEFT         3
+#define NEIGHBOR_TOP_LEFT     0
+
+const int UI_PANEL_W = 200;
+const int WND_H = 600;
+const int WND_W = 1000;
+const int GRID_H = 580;
 const int GRID_W = WND_W - UI_PANEL_W;
 const int GRID_PADDING = 10;  
-const int CELL_SIZE = 8;
+const int CELL_SIZE = 4;
 
 bool is_running = true;
 
@@ -51,26 +60,41 @@ void initialize_cell_layout(int *cell_x_positions, int *cell_y_positions, int ro
 }
 
 int* generate_neighbor_array(int rows, int cols) {
+    // Add error handling for malloc
     int *neighbor_array = (int *)malloc(8 * rows * cols * sizeof(int));
+    if (!neighbor_array) {
+        TraceLog(LOG_ERROR, "Failed to allocate neighbor array");
+        return NULL;
+    }
+
+    // Define neighbor offsets for clearer code
+    const int neighbor_offsets[8][2] = {
+        {-1, -1}, {-1, 0}, {-1, 1},  // Top row
+        {0, -1},           {0, 1},    // Middle row
+        {1, -1},  {1, 0},  {1, 1}     // Bottom row
+    };
+
     for (int i = 0; i < rows; i++) {
         for (int j = 0; j < cols; j++) {
             int idx = i * cols + j;
-            int neighbor_idx = 0;
-            for (int x = -1; x <= 1; x++) {
-                for (int y = -1; y <= 1; y++) {
-                    if (x == 0 && y == 0) continue;
-                    int ni = i + x;
-                    int nj = j + y;
-                    if (ni >= 0 && ni < rows && nj >= 0 && nj < cols) {
-                        neighbor_array[idx * 8 + neighbor_idx++] = ni * cols + nj;
-                    } else {
-                        neighbor_array[idx * 8 + neighbor_idx++] = -1; // Invalid neighbor
-                    }
-                }
+
+            // Calculate all 8 neighbors using the offset array
+            for (int n = 0; n < 8; n++) {
+                int ni = i + neighbor_offsets[n][0];
+                int nj = j + neighbor_offsets[n][1];
+
+                neighbor_array[idx * 8 + n] = (ni >= 0 && ni < rows && nj >= 0 && nj < cols) 
+                    ? ni * cols + nj 
+                    : -1;
             }
         }
     }
+
     return neighbor_array;
+}
+
+inline int get_neighbor(const int* neighbor_array, int cell_idx, int neighbor_direction) {
+    return neighbor_array[cell_idx * 8 + neighbor_direction];
 }
 
 int draw_grid(Cell *grid, int *cell_x_positions, int *cell_y_positions, int rows, int cols) {
@@ -154,108 +178,137 @@ float calculate_water_pressure(Cell *grid, int idx, int rows, int cols, int *nei
 }
 
 void update_sand(Cell *grid, Cell *new_grid, int idx, int rows, int cols, int *neighbor_array) {
-    int below = neighbor_array[idx * 8 + 6];
-    int below_left = neighbor_array[idx * 8 + 5];
-    int below_right = neighbor_array[idx * 8 + 7];
+    if (new_grid[idx].updated_this_frame) return;
 
-    if (below != -1) {
-        if (grid[below].type == NONE) {
-            swap_cells(&new_grid[idx], &new_grid[below]);
-            new_grid[below].updated_this_frame = true;
-            new_grid[below].velocity_y = 1.0f;
-            return;
-        }
+    int below = get_neighbor(neighbor_array, idx, NEIGHBOR_BOTTOM);
+    int below_left = get_neighbor(neighbor_array, idx, NEIGHBOR_BOTTOM_LEFT);
+    int below_right = get_neighbor(neighbor_array, idx, NEIGHBOR_BOTTOM_RIGHT);
 
-        // interaction with water (sand sinks)
-        if (grid[below].type == WATER) {
-            swap_cells(&new_grid[idx], &new_grid[below]);
-            new_grid[below].updated_this_frame = true;
-            new_grid[below].velocity_y = 0.5f;
-            return;
-        }
+    // FLOW STATE - same pattern as water for consistency
+    int flow_down = (below != -1 && !new_grid[below].updated_this_frame && 
+                    (new_grid[below].type == NONE || new_grid[below].type == WATER));
+    int flow_down_left = (below_left != -1 && !new_grid[below_left].updated_this_frame && 
+                         (new_grid[below_left].type == NONE || new_grid[below_left].type == WATER));
+    int flow_down_right = (below_right != -1 && !new_grid[below_right].updated_this_frame && 
+                          (new_grid[below_right].type == NONE || new_grid[below_right].type == WATER));
 
-        if (grid[below].type == SAND && grid[idx].velocity_y > 0.0f) {
-            swap_cells(&new_grid[idx], &new_grid[below]);
-            return;
-        }
-        // check if stationary
-        bool can_fall_left = (below_left != -1 && grid[below_left].type == NONE);
-        bool can_fall_right = (below_right != -1 && grid[below_right].type == NONE);
-
-        if (can_fall_left && can_fall_right) {
-            int target = (rand() % 2 == 0) ? below_left : below_right;
-            swap_cells(&new_grid[idx], &new_grid[target]);
-            new_grid[target].updated_this_frame = true;
-        } else if (can_fall_left) {
-            swap_cells(&new_grid[idx], &new_grid[below_left]);
-            new_grid[below_left].updated_this_frame = true;
-        } else if (can_fall_right) {
-            swap_cells(&new_grid[idx], &new_grid[below_right]);
-            new_grid[below_right].updated_this_frame = true;
-        }
+    // PRIMARY MOVEMENT LOGIC
+    if (flow_down) {
+        // Direct fall - increase velocity
+        swap_cells(&new_grid[idx], &new_grid[below]);
+        new_grid[below].updated_this_frame = true;
+        new_grid[below].velocity_y = fmin(new_grid[below].velocity_y + 0.5f, 2.0f);
+        return;
     }
+
+    // More aggressive diagonal movement
+    if (flow_down_left || flow_down_right) {
+        int target;
+
+        // If both sides available, use velocity and randomness
+        if (flow_down_left && flow_down_right) {
+            // Bias based on horizontal velocity
+            float left_chance = 0.9f ;
+
+            target = (rand() / (float)RAND_MAX < left_chance) ? below_left : below_right;
+        } else {
+            target = flow_down_left ? below_left : below_right;
+        }
+
+        swap_cells(&new_grid[idx], &new_grid[target]);
+        new_grid[target].updated_this_frame = true;
+
+        // Update velocity for next frame
+        new_grid[target].velocity_y = fmin(new_grid[target].velocity_y + 0.3f, 1.5f);
+        new_grid[target].velocity_x = (target == below_left) ? -0.5f : 0.5f;
+
+        return;
+    }
+
+    // If we can't move, slowly reset velocities
+    new_grid[idx].velocity_x *= 0.8f;
+    new_grid[idx].velocity_y *= 0.8f;
 }
 
 void update_water(Cell *grid, Cell *new_grid, int idx, int rows, int cols, int *neighbor_array) {
-    int below = neighbor_array[idx * 8 + 6];
-    int below_left = neighbor_array[idx * 8 + 5];
-    int below_right = neighbor_array[idx * 8 + 7];
-    int left = neighbor_array[idx * 8 + 3];
-    int right = neighbor_array[idx * 8 + 4];
-
-    // Calculate water pressure (affects spread rate)
-    float pressure = calculate_water_pressure(grid, idx, rows, cols, neighbor_array);
-
-    // Primary downward movement
-    if (below != -1 && grid[below].type == NONE) {
-        swap_cells(&new_grid[idx], &new_grid[below]);
-        new_grid[below].updated_this_frame = true;
+    // Skip if already updated
+    if (new_grid[idx].updated_this_frame) {
         return;
     }
 
-    // Diagonal falling with randomization
-    bool can_fall_left = (below_left != -1 && grid[below_left].type == NONE);
-    bool can_fall_right = (below_right != -1 && grid[below_right].type == NONE);
+    // Get neighbor indices using the new helper function
+    int below = get_neighbor(neighbor_array, idx, NEIGHBOR_BOTTOM);
+    int below_left = get_neighbor(neighbor_array, idx, NEIGHBOR_BOTTOM_LEFT);
+    int below_right = get_neighbor(neighbor_array, idx, NEIGHBOR_BOTTOM_RIGHT);
+    int left = get_neighbor(neighbor_array, idx, NEIGHBOR_LEFT);
+    int right = get_neighbor(neighbor_array, idx, NEIGHBOR_RIGHT);
 
-    if (can_fall_left || can_fall_right) {
+    // FLOW STATE
+    // Check if cell can flow in each direction (1 = can flow, 0 = blocked)
+    int flow_left = (left != -1 && !new_grid[left].updated_this_frame && 
+                    new_grid[left].type == NONE) ? 1 : 0;
+
+    int flow_right = (right != -1 && !new_grid[right].updated_this_frame && 
+                     new_grid[right].type == NONE) ? 1 : 0;
+
+    int flow_down = (below != -1 && !new_grid[below].updated_this_frame && 
+                    new_grid[below].type == NONE) ? 1 : 0;
+
+    int flow_down_left = (below_left != -1 && !new_grid[below_left].updated_this_frame && 
+                         new_grid[below_left].type == NONE) ? 1 : 0;
+    
+    int flow_down_right = (below_right != -1 && !new_grid[below_right].updated_this_frame && 
+                          new_grid[below_right].type == NONE) ? 1 : 0;
+
+    // PRIMARY MOVEMENT LOGIC
+    if (flow_down) {
+        // Fall straight down
+        swap_cells(&new_grid[idx], &new_grid[below]);
+        new_grid[below].updated_this_frame = true;
+        new_grid[idx].updated_this_frame = true;
+    }
+    else if (flow_down_left || flow_down_right) {
+        // Try to flow diagonally
         int target;
-        if (can_fall_left && can_fall_right) {
-            target = (rand() % 2 == 0) ? below_left : below_right;
+        if (flow_down_left && flow_down_right) {
+            // Randomize between left and right when both are available
+            target = (rand() % 2) ? below_left : below_right;
         } else {
-            target = can_fall_left ? below_left : below_right;
+            // Flow to whichever side is available
+            target = flow_down_left ? below_left : below_right;
         }
         swap_cells(&new_grid[idx], &new_grid[target]);
         new_grid[target].updated_this_frame = true;
-        return;
+        new_grid[idx].updated_this_frame = true;
+    }
+    else if (flow_left || flow_right) {
+        // Horizontal flow with momentum
+        int target;
+        if (flow_left && flow_right) {
+            // If both sides open, pick random but bias based on existing velocity
+            target = (rand() % 2) ? left : right;
+        } else {
+            // Flow to whichever side is open
+            target = flow_left ? left : right;
+        }
+        
+        swap_cells(&new_grid[idx], &new_grid[target]);
+        new_grid[target].updated_this_frame = true;
+        new_grid[idx].updated_this_frame = true;
+        
+        // Update momentum based on flow direction
+        new_grid[target].velocity_x = (target == left) ? -1.0f : 1.0f;
     }
 
-    // Horizontal spread with pressure
-    if (below != -1 && grid[below].type != NONE) {
-        bool can_move_left = (left != -1 && grid[left].type == NONE);
-        bool can_move_right = (right != -1 && grid[right].type == NONE);
-
-        // Apply pressure to spreading
-        if (rand() % 100 < pressure * 80) {  // Higher pressure = more likely to spread
-            if (can_move_left && can_move_right) {
-                int target = (rand() % 2 == 0) ? left : right;
-                swap_cells(&new_grid[idx], &new_grid[target]);
-                new_grid[target].updated_this_frame = true;
-            } else if (can_move_left) {
-                swap_cells(&new_grid[idx], &new_grid[left]);
-                new_grid[left].updated_this_frame = true;
-            } else if (can_move_right) {
-                swap_cells(&new_grid[idx], &new_grid[right]);
-                new_grid[right].updated_this_frame = true;
-            }
+    // Temperature effects - evaporation
+    if (new_grid[idx].temperature >= 100) {
+        float evaporation_chance = (new_grid[idx].temperature - 100.0f) / 20.0f;
+        if ((float)rand() / RAND_MAX < evaporation_chance) {
+            new_grid[idx].type = NONE;
+            new_grid[idx].temperature = 100.0f;
         }
     }
-
-    // Temperature effects
-    if (new_grid[idx].temperature >= 100) {
-        new_grid[idx].type = NONE;  // Water evaporates
-    }
 }
-
 void update_fire(Cell *grid, Cell *new_grid, int idx, int rows, int cols, int *neighbor_array) {
     int heat_radius = 2;
     
@@ -475,7 +528,7 @@ void draw_brush_slider() {
 int main(void) {
     InitWindow(WND_W, WND_H, "Falling Sand");
 
-    int fps = 5;
+    int fps = 30;
     float update_interval = 1.0f / fps;
     float time_since_last_update = 0.0f; 
 
@@ -504,6 +557,15 @@ int main(void) {
     initialize_cell_layout(cell_x_positions, cell_y_positions, rows, cols);
 
     int *neighbor_array = generate_neighbor_array(rows, cols);
+    if (!neighbor_array) {
+        TraceLog(LOG_ERROR, "Failed to generate neighbor array");
+        free(grid);
+        free(new_grid);
+        free(cell_x_positions);
+        free(cell_y_positions);
+        CloseWindow();
+        return 1;
+    }
 
     while (!WindowShouldClose()) {
         if (IsKeyReleased(KEY_SPACE)) {
@@ -527,7 +589,7 @@ int main(void) {
         ClearBackground(RAYWHITE);
         draw_grid(grid, cell_x_positions, cell_y_positions, rows, cols);
 
-        draw_buttons(GRID_W, UI_PANEL_W);
+        draw_buttons(GRID_W + 30, UI_PANEL_W - 50);
         draw_brush_outline();
         draw_brush_slider();
         EndDrawing();
